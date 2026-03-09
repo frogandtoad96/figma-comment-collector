@@ -1,0 +1,15 @@
+{
+  "name": "figma-comment-collector",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "group-comments": "node group-comments.js",
+    "make-ai-ready": "node make-ai-ready.js",
+    "make-summary-input": "node make-summary-input.js",
+    "collect-all": "node index.js && node group-comments.js && node make-ai-ready.js && node make-summary-input.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3"
+  }
+}

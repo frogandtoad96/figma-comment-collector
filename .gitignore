@@ -1,0 +1,8 @@
+.env
+comments.json
+mapped-comments.json
+grouped-comments.json
+ai-ready-comments.json
+summary-input.txt
+node_modules
+.DS_Store
