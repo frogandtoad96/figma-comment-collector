@@ -1,0 +1,174 @@
+cat > api/report.js <<'EOF'
+async function fetchComments(token, fileKey) {
+  const url = `https://api.figma.com/v1/files/${fileKey}/comments`;
+
+  const res = await fetch(url, {
+    headers: { "X-Figma-Token": token }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`댓글 조회 실패: ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  return data.comments || [];
+}
+
+async function fetchFile(token, fileKey) {
+  const url = `https://api.figma.com/v1/files/${fileKey}`;
+
+  const res = await fetch(url, {
+    headers: { "X-Figma-Token": token }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`파일 조회 실패: ${res.status} ${text}`);
+  }
+
+  return await res.json();
+}
+
+function walk(node, parentId = null, nodeMap = {}, parentMap = {}) {
+  if (!node || !node.id) return { nodeMap, parentMap };
+
+  nodeMap[node.id] = node;
+  parentMap[node.id] = parentId;
+
+  if (node.children && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      walk(child, node.id, nodeMap, parentMap);
+    }
+  }
+
+  return { nodeMap, parentMap };
+}
+
+function findAncestorFrame(nodeId, nodeMap, parentMap) {
+  let currentId = nodeId;
+
+  while (currentId) {
+    const currentNode = nodeMap[currentId];
+    if (!currentNode) break;
+
+    if (currentNode.type === "FRAME") {
+      return currentNode;
+    }
+
+    currentId = parentMap[currentId];
+  }
+
+  return null;
+}
+
+function groupByFrame(mappedComments) {
+  const groupedMap = {};
+
+  for (const item of mappedComments) {
+    if (!item.frameName) continue;
+
+    if (!groupedMap[item.frameName]) {
+      groupedMap[item.frameName] = {
+        frameName: item.frameName,
+        commentCount: 0,
+        comments: []
+      };
+    }
+
+    groupedMap[item.frameName].comments.push({
+      message: item.message,
+      created_at: item.created_at,
+      user: item.user
+    });
+
+    groupedMap[item.frameName].commentCount += 1;
+  }
+
+  return Object.values(groupedMap).sort((a, b) => b.commentCount - a.commentCount);
+}
+
+function cleanMessage(message) {
+  if (!message) return "";
+  return message.replace(/\r/g, "").replace(/\n{2,}/g, "\n").trim();
+}
+
+function buildDocs(grouped) {
+  let notion = "# Figma 댓글 변경사항 정리\n\n";
+  let figma = "";
+
+  grouped.forEach((group) => {
+    const clean = group.comments
+      .map((c) => cleanMessage(c.message))
+      .filter((msg) => {
+        if (!msg) return false;
+        if (msg.includes("감사")) return false;
+        if (msg.includes("확인")) return false;
+        if (msg.includes("@")) return false;
+        if (msg.length < 4) return false;
+        return true;
+      });
+
+    if (clean.length === 0) return;
+
+    notion += `## ${group.frameName}\n`;
+    figma += `## ${group.frameName}\n`;
+
+    clean.slice(0, 5).forEach((msg) => {
+      notion += `- ${msg}\n`;
+      figma += `- ${msg}\n`;
+    });
+
+    notion += "\n";
+    figma += "\n";
+  });
+
+  return { notion, figma };
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    const { token, fileKey } = req.body || {};
+
+    if (!token || !fileKey) {
+      return res.status(400).json({ error: "token과 fileKey가 필요합니다." });
+    }
+
+    const comments = await fetchComments(token, fileKey);
+    const fileData = await fetchFile(token, fileKey);
+
+    const { nodeMap, parentMap } = walk(fileData.document);
+
+    const mappedComments = comments
+      .filter((c) => c.client_meta && c.client_meta.node_id)
+      .map((comment) => {
+        const nodeId = comment.client_meta.node_id;
+        const frame = findAncestorFrame(nodeId, nodeMap, parentMap);
+
+        return {
+          message: comment.message,
+          created_at: comment.created_at,
+          user: comment.user?.handle || "unknown",
+          frameName: frame ? frame.name : null
+        };
+      });
+
+    const grouped = groupByFrame(mappedComments);
+    const { notion, figma } = buildDocs(grouped);
+
+    return res.status(200).json({
+      changeLog: notion,
+      figmaTodo: figma,
+      groupedCount: grouped.length
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message || "서버 실행 중 오류가 발생했습니다."
+    });
+  }
+}
+EOF
