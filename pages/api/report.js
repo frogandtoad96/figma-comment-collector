@@ -92,6 +92,22 @@ function cleanMessage(message) {
   return message.replace(/\r/g, "").replace(/\n{2,}/g, "\n").trim();
 }
 
+function classifyComment(msg) {
+  if (/그대로 두시면|수정예정|피드백 오면|감사|확인|좋아요|추가했습니다|반영했습니다/.test(msg))
+    return "반응";
+
+  if (/텍스트|문구|워딩|오타|표기|띄어쓰기|숫자표기/.test(msg))
+    return "텍스트 수정";
+
+  if (/버튼|정렬|위치|UI|간격|레이아웃|색상|컬러|아이콘|화살표|노출|미노출|크기|디자인|팝업|모달|토스트|배지|라벨|톤앤매너|모바일 동일|모바일/.test(msg))
+    return "UI 수정";
+
+  if (/추가|삭제|기능|필터|옵션|기간|자동취소|상태|제재|연동|조회|이동|변경|입력필드|선택 시|바껴야|변경되어야|추가되어야|검색|7일/.test(msg))
+    return "기능 변경";
+
+  return "기타";
+}
+
 function buildDocs(grouped) {
   let notion = "# Figma 댓글 변경사항 정리\n\n";
   let figma = "";
@@ -110,16 +126,39 @@ function buildDocs(grouped) {
 
     if (clean.length === 0) return;
 
-    notion += `## ${group.frameName}\n`;
-    figma += `## ${group.frameName}\n`;
+   notion += `## ${group.frameName}\n`;
+figma += `## ${group.frameName}\n`;
 
-    clean.slice(0, 5).forEach((msg) => {
-      notion += `- ${msg}\n`;
-      figma += `- ${msg}\n`;
-    });
+const groupedByType = {};
 
-    notion += "\n";
-    figma += "\n";
+clean.forEach((msg) => {
+  const type = classifyComment(msg);
+
+  if (!groupedByType[type]) {
+    groupedByType[type] = [];
+  }
+
+  groupedByType[type].push(msg);
+});
+
+Object.keys(groupedByType).forEach((type) => {
+  if (type === "반응") return;
+  if (type === "기타") return;
+
+  notion += `[${type}]\n`;
+  figma += `[${type}]\n`;
+
+  groupedByType[type].slice(0, 5).forEach((msg) => {
+    notion += `- ${msg}\n`;
+    figma += `- ${msg}\n`;
+  });
+
+  notion += "\n";
+  figma += "\n";
+});
+
+notion += "\n";
+figma += "\n";
   });
 
   return { notion, figma };
