@@ -1,213 +1,106 @@
-async function fetchComments(token, fileKey) {
-  const url = `https://api.figma.com/v1/files/${fileKey}/comments`;
-  const res = await fetch(url, { headers: { "X-Figma-Token": token } });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`댓글 조회 실패: ${res.status} ${text}`);
-  }
-  const data = await res.json();
-  return data.comments || [];
-}
-
-async function fetchFile(token, fileKey) {
-  const url = `https://api.figma.com/v1/files/${fileKey}`;
-  const res = await fetch(url, { headers: { "X-Figma-Token": token } });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`파일 조회 실패: ${res.status} ${text}`);
-  }
-  return await res.json();
-}
-
-function walk(node, parentId = null, nodeMap = {}, parentMap = {}) {
-  if (!node || !node.id) return { nodeMap, parentMap };
-  nodeMap[node.id] = node;
-  parentMap[node.id] = parentId;
-  if (node.children && Array.isArray(node.children)) {
-    for (const child of node.children) {
-      walk(child, node.id, nodeMap, parentMap);
-    }
-  }
-  return { nodeMap, parentMap };
-}
-
-function findAncestorFrame(nodeId, nodeMap, parentMap) {
-  let currentId = nodeId;
-  while (currentId) {
-    const currentNode = nodeMap[currentId];
-    if (!currentNode) break;
-    if (currentNode.type === "FRAME") return currentNode;
-    currentId = parentMap[currentId];
-  }
-  return null;
-}
-
-function groupByFrame(mappedComments) {
-  const groupedMap = {};
-
-  for (const item of mappedComments) {
-    if (!item.frameName) continue;
-
-    if (!groupedMap[item.frameName]) {
-      groupedMap[item.frameName] = {
-        frameName: item.frameName,
-        frameId: item.frameId,
-        commentCount: 0,
-        latest_updated_at: null,
-        comments: []
-      };
-    }
-
-    groupedMap[item.frameName].comments.push({
-      message: item.message,
-      created_at: item.created_at,
-      user: item.user
-    });
-
-    // 가장 최근 날짜 업데이트
-    const current = groupedMap[item.frameName].latest_updated_at;
-    if (!current || item.created_at > current) {
-      groupedMap[item.frameName].latest_updated_at = item.created_at;
-    }
-
-    groupedMap[item.frameName].commentCount += 1;
-  }
-
-  // 최근 업데이트순 정렬
-  return Object.values(groupedMap).sort((a, b) => {
-    if (!a.latest_updated_at) return 1;
-    if (!b.latest_updated_at) return -1;
-    return new Date(b.latest_updated_at) - new Date(a.latest_updated_at);
-  });
-}
-
-function cleanMessage(message) {
-  if (!message) return "";
-  return message.replace(/\r/g, "").replace(/\n{2,}/g, "\n").trim();
-}
-
-function classifyComment(msg) {
-  if (/그대로 두시면|수정예정|피드백 오면|감사|확인|좋아요|추가했습니다|반영했습니다/.test(msg))
-    return "반응";
-  if (/텍스트|문구|워딩|오타|표기|띄어쓰기|숫자표기/.test(msg))
-    return "텍스트 수정";
-  if (/버튼|정렬|위치|UI|간격|레이아웃|색상|컬러|아이콘|화살표|노출|미노출|크기|디자인|팝업|모달|토스트|배지|라벨|톤앤매너|모바일 동일|모바일/.test(msg))
-    return "UI 수정";
-  if (/추가|삭제|기능|필터|옵션|기간|자동취소|상태|제재|연동|조회|이동|변경|입력필드|선택 시|바껴야|변경되어야|추가되어야|검색|7일/.test(msg))
-    return "기능 변경";
-  return "기타";
-}
-
-function buildDocs(grouped, fileKey) {
-  let notion = "# Figma 댓글 변경사항 정리\n\n";
-  let figma = "";
-
-  grouped.forEach((group) => {
-    const clean = group.comments
-      .map((c) => cleanMessage(c.message))
-      .filter((msg) => {
-        if (!msg) return false;
-        if (msg.includes("감사")) return false;
-        if (msg.includes("확인")) return false;
-        if (msg.includes("@")) return false;
-        if (msg.length < 4) return false;
-        return true;
-      });
-
-    if (clean.length === 0) return;
-
-    const frameId = group.frameId;
-    const figmaLink = frameId
-      ? `https://www.figma.com/file/${fileKey}?node-id=${frameId}`
-      : null;
-
-    notion += `## ${group.frameName}\n`;
-    figma += `## ${group.frameName}\n`;
-
-    // 날짜 표시
-    if (group.latest_updated_at) {
-      const d = new Date(group.latest_updated_at);
-      const dateStr = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
-      notion += `🕐 최근 업데이트: ${dateStr}\n`;
-      figma += `🕐 최근 업데이트: ${dateStr}\n`;
-    }
-
-    if (figmaLink) {
-      notion += `🔗 ${figmaLink}\n\n`;
-      figma += `🔗 ${figmaLink}\n\n`;
-    }
-
-    const groupedByType = {};
-    clean.forEach((msg) => {
-      const type = classifyComment(msg);
-      if (!groupedByType[type]) groupedByType[type] = [];
-      groupedByType[type].push(msg);
-    });
-
-    Object.keys(groupedByType).forEach((type) => {
-      if (type === "반응") return;
-      if (type === "기타") return;
-
-      notion += `[${type}]\n`;
-      figma += `[${type}]\n`;
-
-      groupedByType[type].slice(0, 5).forEach((msg) => {
-        notion += `- ${msg}\n`;
-        figma += `- ${msg}\n`;
-      });
-
-      notion += "\n";
-      figma += "\n";
-    });
-
-    notion += "\n";
-    figma += "\n";
-  });
-
-  return { notion, figma };
-}
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  const { token, fileKey } = req.body || {};
+  if (!token || !fileKey) return res.status(400).json({ error: "token과 fileKey가 필요합니다" });
 
   try {
-    const { token, fileKey } = req.body || {};
+    // 댓글 수집
+    const commentsRes = await fetch(`https://api.figma.com/v1/files/${fileKey}/comments`, {
+      headers: { "X-Figma-Token": token },
+    });
+    if (!commentsRes.ok) {
+      const err = await commentsRes.json();
+      return res.status(commentsRes.status).json({ error: err.err || "Figma API 오류" });
+    }
+    const { comments } = await commentsRes.json();
 
-    if (!token || !fileKey) {
-      return res.status(400).json({ error: "token과 fileKey가 필요합니다." });
+    // 파일 노드 정보
+    const fileRes = await fetch(`https://api.figma.com/v1/files/${fileKey}?depth=2`, {
+      headers: { "X-Figma-Token": token },
+    });
+    const fileData = fileRes.ok ? await fileRes.json() : null;
+
+    // 노드ID → 이름 맵
+    const nodeMap = {};
+    if (fileData?.document?.children) {
+      for (const page of fileData.document.children) {
+        if (page.children) {
+          for (const frame of page.children) {
+            nodeMap[frame.id] = frame.name;
+          }
+        }
+      }
     }
 
-    const comments = await fetchComments(token, fileKey);
-    const fileData = await fetchFile(token, fileKey);
-    const { nodeMap, parentMap } = walk(fileData.document);
+    // 댓글을 화면(frame)별로 그룹핑
+    const frameMap = {};
+    for (const c of comments) {
+      if (!c.client_meta?.node_id) continue;
+      const nodeId = c.client_meta.node_id;
+      const frameName = nodeMap[nodeId] || nodeId;
+      const figmaUrl = `https://www.figma.com/design/${fileKey}/?node-id=${encodeURIComponent(nodeId)}`;
 
-    const mappedComments = comments
-      .filter((c) => c.client_meta && c.client_meta.node_id)
-      .map((comment) => {
-        const nodeId = comment.client_meta.node_id;
-        const frame = findAncestorFrame(nodeId, nodeMap, parentMap);
-        return {
-          message: comment.message,
-          created_at: comment.created_at,
-          user: comment.user?.handle || "unknown",
-          frameName: frame ? frame.name : null,
-          frameId: frame ? frame.id : null
-        };
-      });
+      if (!frameMap[nodeId]) {
+        frameMap[nodeId] = { id: nodeId, name: frameName, url: figmaUrl, comments: [], latest: null };
+      }
 
-    const grouped = groupByFrame(mappedComments);
-    const { notion, figma } = buildDocs(grouped, fileKey);
+      frameMap[nodeId].comments.push(c);
 
-    return res.status(200).json({
-      changeLog: notion,
-      figmaTodo: figma,
-      groupedCount: grouped.length
-    });
-  } catch (err) {
-    return res.status(500).json({
-      error: err.message || "서버 실행 중 오류가 발생했습니다."
-    });
+      const d = new Date(c.created_at);
+      if (!frameMap[nodeId].latest || d > new Date(frameMap[nodeId].latest)) {
+        frameMap[nodeId].latest = c.created_at;
+      }
+    }
+
+    // 최신순 정렬
+    const frames = Object.values(frameMap).sort((a, b) => new Date(b.latest) - new Date(a.latest));
+
+    // 카테고리 키워드 매핑
+    const CAT_KEYWORDS = {
+      "UI 수정": ["UI", "디자인", "레이아웃", "색상", "폰트", "사이즈", "간격", "아이콘", "이미지"],
+      "기능 변경": ["기능", "버튼", "클릭", "동작", "플로우", "인터랙션", "이동", "연결"],
+      "텍스트 수정": ["텍스트", "문구", "글자", "오타", "내용", "복사", "카피"],
+    };
+
+    function categorize(text) {
+      for (const [cat, kws] of Object.entries(CAT_KEYWORDS)) {
+        if (kws.some((k) => text.includes(k))) return cat;
+      }
+      return "UI 수정";
+    }
+
+    // 마크다운 생성
+    let md = `# Figma 수정사항\n\n`;
+    for (const frame of frames) {
+      const date = new Date(frame.latest);
+      const dateStr = `${date.getFullYear()}.${String(date.getMonth()+1).padStart(2,"0")}.${String(date.getDate()).padStart(2,"0")}`;
+      md += `## ${frame.id} / ${frame.name}\n`;
+      md += `🔗 ${frame.url}\n`;
+      md += `🕐 최근 업데이트: ${dateStr}\n\n`;
+
+      // 카테고리별 분류
+      const bycat = {};
+      for (const c of frame.comments) {
+        const text = c.message || "";
+        const cat = categorize(text);
+        if (!bycat[cat]) bycat[cat] = [];
+        bycat[cat].push(text);
+      }
+      for (const [cat, items] of Object.entries(bycat)) {
+        md += `[${cat}]\n`;
+        for (const item of items) md += `- ${item}\n`;
+        md += "\n";
+      }
+    }
+
+    return res.status(200).json({ figmaTodo: md, frameCount: frames.length, commentCount: comments.length });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
   }
 }
