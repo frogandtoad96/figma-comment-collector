@@ -70,6 +70,7 @@ function groupByFrame(mappedComments) {
     if (!groupedMap[item.frameName]) {
       groupedMap[item.frameName] = {
         frameName: item.frameName,
+        frameId: item.frameId,
         commentCount: 0,
         comments: []
       };
@@ -108,7 +109,7 @@ function classifyComment(msg) {
   return "기타";
 }
 
-function buildDocs(grouped) {
+function buildDocs(grouped, fileKey) {
   let notion = "# Figma 댓글 변경사항 정리\n\n";
   let figma = "";
 
@@ -126,8 +127,18 @@ function buildDocs(grouped) {
 
     if (clean.length === 0) return;
 
-   notion += `## ${group.frameName}\n`;
+   const frameId = group.frameId;
+const figmaLink = frameId
+  ? `https://www.figma.com/file/${fileKey}?node-id=${frameId}`
+  : null;
+
+notion += `## ${group.frameName}\n`;
 figma += `## ${group.frameName}\n`;
+
+if (figmaLink) {
+  notion += `🔗 ${figmaLink}\n\n`;
+  figma += `🔗 ${figmaLink}\n\n`;
+}
 
 const groupedByType = {};
 
@@ -192,11 +203,12 @@ export default async function handler(req, res) {
           created_at: comment.created_at,
           user: comment.user?.handle || "unknown",
           frameName: frame ? frame.name : null
+          frameId: frame ? frame.id : null
         };
       });
 
     const grouped = groupByFrame(mappedComments);
-    const { notion, figma } = buildDocs(grouped);
+    const { notion, figma } = buildDocs(grouped, fileKey);
 
     return res.status(200).json({
       changeLog: notion,
