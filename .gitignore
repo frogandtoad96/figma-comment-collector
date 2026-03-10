@@ -8,3 +8,4 @@ node_modules
 .DS_Store
 change-log.md
 figma-todo.md
+.next

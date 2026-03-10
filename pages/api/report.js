@@ -1,4 +1,3 @@
-cat > api/report.js <<'EOF'
 async function fetchComments(token, fileKey) {
   const url = `https://api.figma.com/v1/files/${fileKey}/comments`;
 
@@ -171,4 +170,3 @@ export default async function handler(req, res) {
     });
   }
 }
-EOF
