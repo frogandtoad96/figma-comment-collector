@@ -12,7 +12,12 @@ export default async function handler(req, res) {
   if (!message) return res.status(400).json({ error: "message 없음" });
 
   const body = { message };
-  if (nodeId) body.client_meta = { node_id: nodeId.replace(/-/g, ":") };
+  if (nodeId) {
+    body.client_meta = {
+      node_id: nodeId.replace(/-/g, ":"),
+      node_offset: { x: 0, y: 0 }
+    };
+  }
 
   const figmaRes = await fetch(`https://api.figma.com/v1/files/${fileKey}/comments`, {
     method: "POST",
