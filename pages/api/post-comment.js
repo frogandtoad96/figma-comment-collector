@@ -5,8 +5,11 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).end();
 
-  const { token, fileKey, message, nodeId } = req.body;
-  if (!token || !fileKey || !message) return res.status(400).json({ error: "필수값 누락" });
+  const { token, fileKey, message, nodeId } = req.body || {};
+
+  if (!token) return res.status(400).json({ error: "token 없음" });
+  if (!fileKey) return res.status(400).json({ error: "fileKey 없음" });
+  if (!message) return res.status(400).json({ error: "message 없음" });
 
   const body = { message };
   if (nodeId) body.client_meta = { node_id: nodeId.replace(/-/g, ":") };
@@ -18,6 +21,5 @@ export default async function handler(req, res) {
   });
 
   const data = await figmaRes.json();
-  if (!figmaRes.ok) return res.status(figmaRes.status).json(data);
-  return res.status(200).json(data);
+  return res.status(figmaRes.status).json(data);
 }
