@@ -202,7 +202,7 @@ export default async function handler(req, res) {
           message: comment.message,
           created_at: comment.created_at,
           user: comment.user?.handle || "unknown",
-          frameName: frame ? frame.name : null
+          frameName: frame ? frame.name : null,
           frameId: frame ? frame.id : null
         };
       });
