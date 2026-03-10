@@ -1,63 +1,44 @@
 async function fetchComments(token, fileKey) {
   const url = `https://api.figma.com/v1/files/${fileKey}/comments`;
-
-  const res = await fetch(url, {
-    headers: { "X-Figma-Token": token }
-  });
-
+  const res = await fetch(url, { headers: { "X-Figma-Token": token } });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`댓글 조회 실패: ${res.status} ${text}`);
   }
-
   const data = await res.json();
   return data.comments || [];
 }
 
 async function fetchFile(token, fileKey) {
   const url = `https://api.figma.com/v1/files/${fileKey}`;
-
-  const res = await fetch(url, {
-    headers: { "X-Figma-Token": token }
-  });
-
+  const res = await fetch(url, { headers: { "X-Figma-Token": token } });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`파일 조회 실패: ${res.status} ${text}`);
   }
-
   return await res.json();
 }
 
 function walk(node, parentId = null, nodeMap = {}, parentMap = {}) {
   if (!node || !node.id) return { nodeMap, parentMap };
-
   nodeMap[node.id] = node;
   parentMap[node.id] = parentId;
-
   if (node.children && Array.isArray(node.children)) {
     for (const child of node.children) {
       walk(child, node.id, nodeMap, parentMap);
     }
   }
-
   return { nodeMap, parentMap };
 }
 
 function findAncestorFrame(nodeId, nodeMap, parentMap) {
   let currentId = nodeId;
-
   while (currentId) {
     const currentNode = nodeMap[currentId];
     if (!currentNode) break;
-
-    if (currentNode.type === "FRAME") {
-      return currentNode;
-    }
-
+    if (currentNode.type === "FRAME") return currentNode;
     currentId = parentMap[currentId];
   }
-
   return null;
 }
 
@@ -72,6 +53,7 @@ function groupByFrame(mappedComments) {
         frameName: item.frameName,
         frameId: item.frameId,
         commentCount: 0,
+        latest_updated_at: null,
         comments: []
       };
     }
@@ -82,10 +64,21 @@ function groupByFrame(mappedComments) {
       user: item.user
     });
 
+    // 가장 최근 날짜 업데이트
+    const current = groupedMap[item.frameName].latest_updated_at;
+    if (!current || item.created_at > current) {
+      groupedMap[item.frameName].latest_updated_at = item.created_at;
+    }
+
     groupedMap[item.frameName].commentCount += 1;
   }
 
-  return Object.values(groupedMap).sort((a, b) => b.commentCount - a.commentCount);
+  // 최근 업데이트순 정렬
+  return Object.values(groupedMap).sort((a, b) => {
+    if (!a.latest_updated_at) return 1;
+    if (!b.latest_updated_at) return -1;
+    return new Date(b.latest_updated_at) - new Date(a.latest_updated_at);
+  });
 }
 
 function cleanMessage(message) {
@@ -96,16 +89,12 @@ function cleanMessage(message) {
 function classifyComment(msg) {
   if (/그대로 두시면|수정예정|피드백 오면|감사|확인|좋아요|추가했습니다|반영했습니다/.test(msg))
     return "반응";
-
   if (/텍스트|문구|워딩|오타|표기|띄어쓰기|숫자표기/.test(msg))
     return "텍스트 수정";
-
   if (/버튼|정렬|위치|UI|간격|레이아웃|색상|컬러|아이콘|화살표|노출|미노출|크기|디자인|팝업|모달|토스트|배지|라벨|톤앤매너|모바일 동일|모바일/.test(msg))
     return "UI 수정";
-
   if (/추가|삭제|기능|필터|옵션|기간|자동취소|상태|제재|연동|조회|이동|변경|입력필드|선택 시|바껴야|변경되어야|추가되어야|검색|7일/.test(msg))
     return "기능 변경";
-
   return "기타";
 }
 
@@ -127,49 +116,52 @@ function buildDocs(grouped, fileKey) {
 
     if (clean.length === 0) return;
 
-   const frameId = group.frameId;
-const figmaLink = frameId
-  ? `https://www.figma.com/file/${fileKey}?node-id=${frameId}`
-  : null;
+    const frameId = group.frameId;
+    const figmaLink = frameId
+      ? `https://www.figma.com/file/${fileKey}?node-id=${frameId}`
+      : null;
 
-notion += `## ${group.frameName}\n`;
-figma += `## ${group.frameName}\n`;
+    notion += `## ${group.frameName}\n`;
+    figma += `## ${group.frameName}\n`;
 
-if (figmaLink) {
-  notion += `🔗 ${figmaLink}\n\n`;
-  figma += `🔗 ${figmaLink}\n\n`;
-}
+    // 날짜 표시
+    if (group.latest_updated_at) {
+      const d = new Date(group.latest_updated_at);
+      const dateStr = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+      notion += `🕐 최근 업데이트: ${dateStr}\n`;
+      figma += `🕐 최근 업데이트: ${dateStr}\n`;
+    }
 
-const groupedByType = {};
+    if (figmaLink) {
+      notion += `🔗 ${figmaLink}\n\n`;
+      figma += `🔗 ${figmaLink}\n\n`;
+    }
 
-clean.forEach((msg) => {
-  const type = classifyComment(msg);
+    const groupedByType = {};
+    clean.forEach((msg) => {
+      const type = classifyComment(msg);
+      if (!groupedByType[type]) groupedByType[type] = [];
+      groupedByType[type].push(msg);
+    });
 
-  if (!groupedByType[type]) {
-    groupedByType[type] = [];
-  }
+    Object.keys(groupedByType).forEach((type) => {
+      if (type === "반응") return;
+      if (type === "기타") return;
 
-  groupedByType[type].push(msg);
-});
+      notion += `[${type}]\n`;
+      figma += `[${type}]\n`;
 
-Object.keys(groupedByType).forEach((type) => {
-  if (type === "반응") return;
-  if (type === "기타") return;
+      groupedByType[type].slice(0, 5).forEach((msg) => {
+        notion += `- ${msg}\n`;
+        figma += `- ${msg}\n`;
+      });
 
-  notion += `[${type}]\n`;
-  figma += `[${type}]\n`;
+      notion += "\n";
+      figma += "\n";
+    });
 
-  groupedByType[type].slice(0, 5).forEach((msg) => {
-    notion += `- ${msg}\n`;
-    figma += `- ${msg}\n`;
-  });
-
-  notion += "\n";
-  figma += "\n";
-});
-
-notion += "\n";
-figma += "\n";
+    notion += "\n";
+    figma += "\n";
   });
 
   return { notion, figma };
@@ -189,7 +181,6 @@ export default async function handler(req, res) {
 
     const comments = await fetchComments(token, fileKey);
     const fileData = await fetchFile(token, fileKey);
-
     const { nodeMap, parentMap } = walk(fileData.document);
 
     const mappedComments = comments
@@ -197,7 +188,6 @@ export default async function handler(req, res) {
       .map((comment) => {
         const nodeId = comment.client_meta.node_id;
         const frame = findAncestorFrame(nodeId, nodeMap, parentMap);
-
         return {
           message: comment.message,
           created_at: comment.created_at,
